@@ -75,7 +75,7 @@ public class Channel {
   var state: ChannelState
   
   /// Collection of event bindings
-  var bindingsDel: [Binding]
+  let syncBindingsDel: SynchronizedArray<Binding>
   
   /// Tracks event binding ref counters
   var bindingRef: Int
@@ -108,7 +108,7 @@ public class Channel {
     self.topic = topic
     self.params = params
     self.socket = socket
-    self.bindingsDel = []
+    self.syncBindingsDel = SynchronizedArray()
     self.bindingRef = 0
     self.timeout = socket.timeout
     self.joinedOnce = false
@@ -221,7 +221,7 @@ public class Channel {
     self.delegateOn(ChannelEvent.reply, to: self) { (self, message) in
       // Trigger bindings
       self.trigger(event: self.replyEventName(message.ref),
-                   payload: message.payload,
+                   payload: message.rawPayload,
                    ref: message.ref,
                    joinRef: message.joinRef)
     }
@@ -405,7 +405,7 @@ public class Channel {
     let ref = bindingRef
     self.bindingRef = ref + 1
     
-    self.bindingsDel.append(Binding(event: event, ref: ref, callback: delegated))
+    self.syncBindingsDel.append(Binding(event: event, ref: ref, callback: delegated))
     return ref
   }
   
@@ -429,7 +429,7 @@ public class Channel {
   /// - parameter event: Event to unsubscribe from
   /// - paramter ref: Ref counter returned when subscribing. Can be omitted
   public func off(_ event: String, ref: Int? = nil) {
-    self.bindingsDel.removeAll { (bind) -> Bool in
+    self.syncBindingsDel.removeAll { (bind) -> Bool in
       bind.event == event && (ref == nil || ref == bind.ref)
     }
   }
@@ -543,7 +543,7 @@ public class Channel {
       ChannelEvent.isLifecyleEvent(message.event)
       else { return true }
 
-    self.socket?.logItems("channel", "dropping outdated message", message.topic, message.event, message.payload, safeJoinRef)
+    self.socket?.logItems("channel", "dropping outdated message", message.topic, message.event, message.rawPayload, safeJoinRef)
     return false
   }
   
@@ -572,9 +572,11 @@ public class Channel {
   func trigger(_ message: Message) {
     let handledMessage = self.onMessage(message)
     
-    self.bindingsDel
-      .filter( { return $0.event == message.event } )
-      .forEach( { $0.callback.call(handledMessage) } )
+    self.syncBindingsDel.forEach { binding in
+        if binding.event == message.event {
+            binding.callback.call(handledMessage)
+        }
+    }
   }
   
   /// Triggers an event to the correct event bindings created by

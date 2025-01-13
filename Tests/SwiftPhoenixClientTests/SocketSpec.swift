@@ -76,12 +76,20 @@ class SocketSpec: QuickSpec {
       
       it("should construct a valid URL", closure: {
         
+        // test vsn
+        expect(Socket("http://localhost:4000/socket/websocket",
+                      paramsClosure: { ["token": "abc123"] },
+                      vsn: "1.0.0")
+          .endPointUrl
+          .absoluteString)
+          .to(equal("http://localhost:4000/socket/websocket?vsn=1.0.0&token=abc123"))
+        
         // test params
         expect(Socket("http://localhost:4000/socket/websocket",
                       paramsClosure: { ["token": "abc123"] })
           .endPointUrl
           .absoluteString)
-          .to(equal("http://localhost:4000/socket/websocket?token=abc123"))
+          .to(equal("http://localhost:4000/socket/websocket?vsn=2.0.0&token=abc123"))
         
         expect(Socket("ws://localhost:4000/socket/websocket",
                       paramsClosure: { ["token": "abc123", "user_id": 1] })
@@ -89,8 +97,8 @@ class SocketSpec: QuickSpec {
           .absoluteString)
           .to(satisfyAnyOf(
             // absoluteString does not seem to return a string with the params in a deterministic order
-            equal("ws://localhost:4000/socket/websocket?token=abc123&user_id=1"),
-            equal("ws://localhost:4000/socket/websocket?user_id=1&token=abc123")
+            equal("ws://localhost:4000/socket/websocket?vsn=2.0.0&token=abc123&user_id=1"),
+            equal("ws://localhost:4000/socket/websocket?vsn=2.0.0&user_id=1&token=abc123")
             )
         )
         
@@ -102,8 +110,8 @@ class SocketSpec: QuickSpec {
           .absoluteString)
           .to(satisfyAnyOf(
             // absoluteString does not seem to return a string with the params in a deterministic order
-            equal("ws://localhost:4000/socket/websocket?token=abc%20123&user_id=1"),
-            equal("ws://localhost:4000/socket/websocket?user_id=1&token=abc%20123")
+            equal("ws://localhost:4000/socket/websocket?vsn=2.0.0&token=abc%20123&user_id=1"),
+            equal("ws://localhost:4000/socket/websocket?vsn=2.0.0&user_id=1&token=abc%20123")
             )
         )
       })
@@ -196,7 +204,7 @@ class SocketSpec: QuickSpec {
         var close = 0
         socket.onClose { close += 1 }
         
-        var lastError: Error?
+        var lastError: (Error, URLResponse?)?
         socket.onError(callback: { (error) in lastError = error })
         
         var lastMessage: Message?
@@ -208,13 +216,13 @@ class SocketSpec: QuickSpec {
         mockWebSocket.delegate?.onOpen()
         expect(open).to(equal(1))
         
-        mockWebSocket.delegate?.onClose(code: 1000)
+        mockWebSocket.delegate?.onClose(code: 1000, reason: nil)
         expect(close).to(equal(1))
         
-        mockWebSocket.delegate?.onError(error: TestError.stub)
+        mockWebSocket.delegate?.onError(error: TestError.stub, response: nil)
         expect(lastError).toNot(beNil())
         
-        let data: [String: Any] = ["topic":"topic","event":"event","payload":["go": true],"status":"ok"]
+        let data: [Any] = ["2", "6", "topic", "event", ["response": ["go": true], "status": "ok"]]
         let text = toWebSocketText(data: data)
         mockWebSocket.delegate?.onMessage(message: text)
         expect(lastMessage?.payload["go"] as? Bool).to(beTrue())
@@ -227,7 +235,7 @@ class SocketSpec: QuickSpec {
         var close = 0
         socket.onClose { close += 1 }
         
-        var lastError: Error?
+        var lastError: (Error, URLResponse?)?
         socket.onError(callback: { (error) in lastError = error })
         
         var lastMessage: Message?
@@ -240,13 +248,13 @@ class SocketSpec: QuickSpec {
         mockWebSocket.delegate?.onOpen()
         expect(open).to(equal(0))
         
-        mockWebSocket.delegate?.onClose(code: 1000)
+        mockWebSocket.delegate?.onClose(code: 1000, reason: nil)
         expect(close).to(equal(0))
         
-        mockWebSocket.delegate?.onError(error: TestError.stub)
+        mockWebSocket.delegate?.onError(error: TestError.stub, response: nil)
         expect(lastError).to(beNil())
         
-        let data: [String: Any] = ["topic":"topic","event":"event","payload":["go": true],"status":"ok"]
+        let data: [Any] = ["2", "6", "topic", "event", ["response": ["go": true], "status": "ok"]]
         let text = toWebSocketText(data: data)
         mockWebSocket.delegate?.onMessage(message: text)
         expect(lastMessage).to(beNil())
@@ -286,10 +294,10 @@ class SocketSpec: QuickSpec {
       })
       
       it("flags the socket as closed cleanly", closure: {
-        expect(socket.closeWasClean).to(beFalse())
+        expect(socket.closeStatus).to(equal(.unknown))
         
         socket.disconnect()
-        expect(socket.closeWasClean).to(beTrue())
+        expect(socket.closeStatus).to(equal(.clean))
       })
       
       it("calls callback", closure: {
@@ -404,15 +412,18 @@ class SocketSpec: QuickSpec {
       it("sends data to connection when connected", closure: {
         mockWebSocket.readyState = .open
         socket.connect()
-        socket.push(topic: "topic", event: "event", payload: ["one": "two"], ref: "ref", joinRef: "joinref")
+        socket.push(topic: "topic", event: "event", payload: ["one": "two"], ref: "6", joinRef: "2")
         
         expect(mockWebSocket.sendDataCalled).to(beTrue())
-        let json = self.decode(mockWebSocket.sendDataReceivedData!)
-        expect(json?["topic"] as? String).to(equal("topic"))
-        expect(json?["event"] as? String).to(equal("event"))
-        expect(json?["payload"] as? [String: String]).to(equal(["one": "two"]))
-        expect(json?["ref"] as? String).to(equal("ref"))
-        expect(json?["join_ref"] as? String).to(equal("joinref"))
+        let json = self.decode(mockWebSocket.sendDataReceivedData!) as! [Any]
+        expect(json[0] as? String).to(equal("2"))
+        expect(json[1] as? String).to(equal("6"))
+        expect(json[2] as? String).to(equal("topic"))
+        expect(json[3] as? String).to(equal("event"))
+        expect(json[4] as? [String: String]).to(equal(["one": "two"]))
+        
+        expect(String(data: mockWebSocket.sendDataReceivedData!, encoding: .utf8))
+          .to(equal("[\"2\",\"6\",\"topic\",\"event\",{\"one\":\"two\"}]"))
       })
       
       it("excludes ref information if not passed", closure: {
@@ -420,9 +431,15 @@ class SocketSpec: QuickSpec {
         socket.connect()
         socket.push(topic: "topic", event: "event", payload: ["one": "two"])
         
-        let json = self.decode(mockWebSocket.sendDataReceivedData!)
-        expect(json?["ref"]).to(beNil())
-        expect(json?["join_ref"]).to(beNil())
+        let json = self.decode(mockWebSocket.sendDataReceivedData!) as! [Any?]
+        expect(json[0] as? String).to(beNil())
+        expect(json[1] as? String).to(beNil())
+        expect(json[2] as? String).to(equal("topic"))
+        expect(json[3] as? String).to(equal("event"))
+        expect(json[4] as? [String: String]).to(equal(["one": "two"]))
+        
+        expect(String(data: mockWebSocket.sendDataReceivedData!, encoding: .utf8))
+          .to(equal("[null,null,\"topic\",\"event\",{\"one\":\"two\"}]"))
       })
       
       it("buffers data when not connected", closure: {
@@ -468,7 +485,7 @@ class SocketSpec: QuickSpec {
       })
     }
     
-    describe("sendHeartbeat") {
+    describe("sendHeartbeat v1") {
       // Mocks
       var mockWebSocket: PhoenixTransportMock!
       
@@ -500,11 +517,15 @@ class SocketSpec: QuickSpec {
         expect(socket.pendingHeartbeatRef).to(equal(String(socket.ref)))
         expect(mockWebSocket.sendDataCalled).to(beTrue())
         
-        let json = self.decode(mockWebSocket.sendDataReceivedData!)
-        expect(json?["topic"] as? String).to(equal("phoenix"))
-        expect(json?["event"] as? String).to(equal("heartbeat"))
-        expect(json?["payload"] as? [String: String]).to(beEmpty())
-        expect(json?["ref"] as? String).to(equal(socket.pendingHeartbeatRef))
+        let json = self.decode(mockWebSocket.sendDataReceivedData!) as? [Any?]
+        expect(json?[0] as? String).to(beNil())
+        expect(json?[1] as? String).to(equal(socket.pendingHeartbeatRef))
+        expect(json?[2] as? String).to(equal("phoenix"))
+        expect(json?[3] as? String).to(equal("heartbeat"))
+        expect(json?[4] as? [String: String]).to(beEmpty())
+        
+        expect(String(data: mockWebSocket.sendDataReceivedData!, encoding: .utf8))
+          .to(equal("[null,\"1\",\"phoenix\",\"heartbeat\",{}]"))
       })
       
       it("does nothing when not connected", closure: {
@@ -676,11 +697,12 @@ class SocketSpec: QuickSpec {
         // Fire the timer
         socket.heartbeatTimer?.fire()
         expect(mockWebSocket.sendDataCalled).to(beTrue())
-        let json = self.decode(mockWebSocket.sendDataReceivedData!)
-        expect(json?["topic"] as? String).to(equal("phoenix"))
-        expect(json?["event"] as? String).to(equal(ChannelEvent.heartbeat))
-        expect(json?["payload"] as? [String: Any]).to(beEmpty())
-        expect(json?["ref"] as? String).to(equal(String(socket.ref)))
+        let json = self.decode(mockWebSocket.sendDataReceivedData!) as? [Any?]
+        expect(json?[0] as? String).to(beNil())
+        expect(json?[1] as? String).to(equal(String(socket.ref)))
+        expect(json?[2] as? String).to(equal("phoenix"))
+        expect(json?[3] as? String).to(equal(ChannelEvent.heartbeat))
+        expect(json?[4] as? [String: Any]).to(beEmpty())
       })
       
       it("should invalidate an old timer and create a new one", closure: {
@@ -719,7 +741,7 @@ class SocketSpec: QuickSpec {
       }
       
       it("schedules reconnectTimer timeout if normal close", closure: {
-        socket.onConnectionClosed(code: Socket.CloseCode.normal.rawValue)
+        socket.onConnectionClosed(code: Socket.CloseCode.normal.rawValue, reason: nil)
         expect(mockTimeoutTimer.scheduleTimeoutCalled).to(beTrue())
       })
       
@@ -730,7 +752,7 @@ class SocketSpec: QuickSpec {
       })
       
       it("schedules reconnectTimer timeout if not normal close", closure: {
-        socket.onConnectionClosed(code: 1001)
+        socket.onConnectionClosed(code: 1001, reason: nil)
         expect(mockTimeoutTimer.scheduleTimeoutCalled).to(beTrue())
       })
       
@@ -738,7 +760,7 @@ class SocketSpec: QuickSpec {
         socket.disconnect()
         socket.connect()
         
-        socket.onConnectionClosed(code: 1001)
+        socket.onConnectionClosed(code: 1001, reason: nil)
         expect(mockTimeoutTimer.scheduleTimeoutCalled).to(beTrue())
       })
       
@@ -752,7 +774,7 @@ class SocketSpec: QuickSpec {
         channel.join()
         expect(channel.state).to(equal(.joining))
 
-        socket.onConnectionClosed(code: 1001)
+        socket.onConnectionClosed(code: 1001, reason: nil)
         expect(errorCalled).to(beTrue())
       })
       
@@ -766,7 +788,7 @@ class SocketSpec: QuickSpec {
         channel.join().trigger("ok", payload: [:])
         expect(channel.state).to(equal(.joined))
         
-        socket.onConnectionClosed(code: 1001)
+        socket.onConnectionClosed(code: 1001, reason: nil)
         expect(errorCalled).to(beTrue())
       })
       
@@ -781,7 +803,7 @@ class SocketSpec: QuickSpec {
         channel.leave()
         expect(channel.state).to(equal(.closed))
         
-        socket.onConnectionClosed(code: 1001)
+        socket.onConnectionClosed(code: 1001, reason: nil)
         expect(errorCalled).to(beFalse())
       })
       
@@ -794,7 +816,7 @@ class SocketSpec: QuickSpec {
         var threeCalled = 0
         socket.onOpen { threeCalled += 1 }
         
-        socket.onConnectionClosed(code: 1000)
+        socket.onConnectionClosed(code: 1000, reason: nil)
         expect(oneCalled).to(equal(1))
         expect(twoCalled).to(equal(1))
         expect(threeCalled).to(equal(0))
@@ -823,10 +845,10 @@ class SocketSpec: QuickSpec {
       }
       
       it("triggers onClose callbacks", closure: {
-        var lastError: Error?
+        var lastError: (Error, URLResponse?)?
         socket.onError(callback: { (error) in lastError = error })
         
-        socket.onConnectionError(TestError.stub)
+        socket.onConnectionError(TestError.stub, response: nil)
         expect(lastError).toNot(beNil())
       })
       
@@ -841,7 +863,7 @@ class SocketSpec: QuickSpec {
         channel.join()
         expect(channel.state).to(equal(.joining))
         
-        socket.onConnectionError(TestError.stub)
+        socket.onConnectionError(TestError.stub, response: nil)
         expect(errorCalled).to(beTrue())
       })
       
@@ -855,7 +877,7 @@ class SocketSpec: QuickSpec {
         channel.join().trigger("ok", payload: [:])
         expect(channel.state).to(equal(.joined))
         
-        socket.onConnectionError(TestError.stub)
+        socket.onConnectionError(TestError.stub, response: nil)
         expect(errorCalled).to(beTrue())
       })
       
@@ -870,7 +892,7 @@ class SocketSpec: QuickSpec {
         channel.leave()
         expect(channel.state).to(equal(.closed))
         
-        socket.onConnectionError(TestError.stub)
+        socket.onConnectionError(TestError.stub, response: nil)
         expect(errorCalled).to(beFalse())
       })
     }
@@ -907,7 +929,7 @@ class SocketSpec: QuickSpec {
         otherChannel.on("event", callback: { (msg) in otherMessage = msg })
         
         
-        let data: [String: Any] = ["topic":"topic","event":"event","payload":["one": "two"],"status":"ok"]
+        let data: [Any?] = [nil, nil, "topic", "event", ["status": "ok", "response": ["one": "two"]]]
         let rawMessage = toWebSocketText(data: data)
         
         socket.onConnectionMessage(rawMessage)
@@ -921,7 +943,7 @@ class SocketSpec: QuickSpec {
         var message: Message?
         socket.onMessage(callback: { (msg) in message = msg })
         
-        let data: [String: Any] = ["topic":"topic","event":"event","payload":["one": "two"],"status":"ok"]
+        let data: [Any?] = [nil, nil, "topic", "event", ["status": "ok", "response": ["one": "two"]]]
         let rawMessage = toWebSocketText(data: data)
         
         socket.onConnectionMessage(rawMessage)
@@ -932,8 +954,7 @@ class SocketSpec: QuickSpec {
       
       it("clears pending heartbeat", closure: {
         socket.pendingHeartbeatRef = "5"
-        let data: [String: Any] = ["topic":"topic","event":"event","payload":["one": "two"],"status":"ok", "ref": "5"]
-        let rawMessage = toWebSocketText(data: data)
+        let rawMessage = "[null,\"5\",\"phoenix\",\"phx_reply\",{\"response\":{},\"status\":\"ok\"}]"
         socket.onConnectionMessage(rawMessage)
         expect(socket.pendingHeartbeatRef).to(beNil())
       })

@@ -35,17 +35,25 @@ public class Message {
   /// Message event
   public let event: String
   
+  /// The raw payload from the Message, including a nested response from
+  /// phx_reply events. It is recommended to use `payload` instead.
+  internal let rawPayload: Payload
+  
   /// Message payload
-  public var payload: Payload
+  public var payload: Payload {
+    guard let response = rawPayload["response"] as? Payload
+    else { return rawPayload }
+    return response
+  }
   
   /// Convenience accessor. Equivalent to getting the status as such:
   /// ```swift
   /// message.payload["status"]
   /// ```
   public var status: String? {
-    return payload["status"] as? String
+    return rawPayload["status"] as? String
   }
-  
+
   init(ref: String = "",
        topic: String = "",
        event: String = "",
@@ -54,22 +62,23 @@ public class Message {
     self.ref = ref
     self.topic = topic
     self.event = event
-    self.payload = payload
+    self.rawPayload = payload
     self.joinRef = joinRef
   }
-  
-  init?(json: [String: Any]) {
-    self.ref = json["ref"] as? String ?? ""
-    self.joinRef = json["join_ref"] as? String
+
+  init?(json: [Any?]) {
+    guard json.count > 4 else { return nil }
+    self.joinRef = json[0] as? String
+    self.ref = json[1] as? String ?? ""
     
-    if
-      let topic = json["topic"] as? String,
-      let event = json["event"] as? String,
-      let payload = json["payload"] as? Payload {
-      
+    if 
+      let topic = json[2] as? String,
+      let event = json[3] as? String,
+      let payload = json[4] as? Payload {
+        
       self.topic = topic
       self.event = event
-      self.payload = payload
+      self.rawPayload = payload
     } else {
       return nil
     }

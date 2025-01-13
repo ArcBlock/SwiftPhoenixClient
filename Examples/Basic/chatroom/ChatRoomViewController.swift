@@ -7,10 +7,7 @@
 //
 
 import UIKit
-import RxSwift
 import SwiftPhoenixClient
-import RxSwiftPhoenixClient
-import StarscreamSwiftPhoenixClient
 
 struct Shout {
   let name: String
@@ -25,7 +22,7 @@ struct Shout {
  NOTE: iOS can, at will, kill your connection if the app enters the background without
  notiftying your process that it has been killed. Thus resulting in a disconnected
  socket when the app comes back to the foreground. The best way around this is to
- listen to Enter Foreground events and manually check if the socket is still connected
+ listen to UIApplication.didBecomeActiveNotification events and manually check if the socket is still connected
  and attempt to reconnect and rejoin any channels.
  
  In this example, the channel is left and socket is disconnected when the app enters
@@ -42,18 +39,16 @@ class ChatRoomViewController: UIViewController {
   
   // MARK: - Attributes
   private let username: String = "ChatRoom"
-//  private let socket = Socket("https://phxchat.herokuapp.com/socket/websocket")
-  private let socket = Socket(endPoint: "https://phxchat.herokuapp.com/socket/websocket", transport: { url in return StarscreamTransport(url: url) })
+//  private let socket = Socket("http://localhost:4000/socket/websocket")
+  	private let socket = Socket("https://phoenix-chat.fly.dev/socket/websocket")
   private let topic: String = "room:lobby"
   
   private var lobbyChannel: Channel?
   private var shouts: [Shout] = []
   
   // Notifcation Subscriptions
-  private var willEnterForegroundObservervation: NSObjectProtocol?
+  private var didbecomeActiveObservervation: NSObjectProtocol?
   private var willResignActiveObservervation: NSObjectProtocol?
-  
-  private let disposeBag = DisposeBag()
   
   
   // MARK: - Lifecycle
@@ -63,7 +58,7 @@ class ChatRoomViewController: UIViewController {
     self.tableView.dataSource = self
     
     // When app enters foreground, be sure that the socket is connected
-    self.observeAppEnteredForeground()
+    self.observeDidBecomeActive()
     
     // Connect to the chat for the first time
     self.connectToChat()
@@ -74,7 +69,7 @@ class ChatRoomViewController: UIViewController {
     
     // When the Controller is removed from the view hierarchy, then stop
     // observing app lifecycle and disconnect from the chat
-    self.removeAppEnteredForegroundObservation()
+    self.removeAppActiveObservation()
     self.disconnectFromChat()
   }
   
@@ -97,28 +92,27 @@ class ChatRoomViewController: UIViewController {
   //----------------------------------------------------------------------
   // MARK: - Background/Foreground reconnect strategy
   //----------------------------------------------------------------------
-  private func observeAppEnteredForeground() {
-    // Make sure that there is no existing observation
-    self.removeAppEnteredForegroundObservation()
+  private func observeDidBecomeActive() {
+    //Make sure there's no other observations
+    self.removeAppActiveObservation()
+    
+    self.didbecomeActiveObservervation = NotificationCenter.default
+      .addObserver(forName: UIApplication.didBecomeActiveNotification,
+                   object: nil,
+                   queue: .main) { [weak self] _ in self?.connectToChat() }
     
     // When the app resigns being active, the leave any existing channels
     // and disconnect from the websocket.
     self.willResignActiveObservervation = NotificationCenter.default
       .addObserver(forName: UIApplication.willResignActiveNotification,
                    object: nil,
-                   queue: .main) { _ in self.disconnectFromChat() }
-    
-    // Whenever the app enters the foreground, make sure sockets are reconnected
-    self.willEnterForegroundObservervation = NotificationCenter.default
-      .addObserver(forName: UIApplication.willEnterForegroundNotification,
-                   object: nil,
-                   queue: .main) { _ in self.connectToChat() }
+                   queue: .main) { [weak self] _ in self?.disconnectFromChat() }
   }
   
-  private func removeAppEnteredForegroundObservation() {
-    if let observer = self.willEnterForegroundObservervation {
+  private func removeAppActiveObservation() {
+    if let observer = self.didbecomeActiveObservervation {
       NotificationCenter.default.removeObserver(observer)
-      self.willEnterForegroundObservervation = nil
+      self.didbecomeActiveObservervation = nil
     }
     
     if let observer = self.willResignActiveObservervation {
@@ -139,29 +133,35 @@ class ChatRoomViewController: UIViewController {
     }
     
     socket.delegateOnError(to: self) { (self, error) in
-      print("CHAT ROOM: Socket Errored. \(error)")
+      let (error, response) = error
+      if let statusCode = (response as? HTTPURLResponse)?.statusCode, statusCode > 400 {
+        print("CHAT ROOM: Socket Errored. \(statusCode)")
+        self.socket.disconnect()
+      } else {
+        print("CHAT ROOM: Socket Errored. \(error)")
+      }
     }
     
     socket.logger = { msg in print("LOG:", msg) }
     
     // Setup the Channel to receive and send messages
     let channel = socket.channel(topic, params: ["status": "joining"])
-    channel.rx
-      .on("shout")
-      .observeOn(MainScheduler.asyncInstance)
-      .subscribe( onNext: { (message) in
-        let payload = message.payload
-        guard
-            let name = payload["name"] as? String,
-            let message = payload["message"] as? String else { return }
-        
-        let shout = Shout(name: name, message: message)
-        self.shouts.append(shout)
-        
+    channel.delegateOn("shout", to: self) { (self, message) in
+      let payload = message.payload
+      guard
+        let name = payload["name"] as? String,
+        let message = payload["message"] as? String else { return }
+      
+      let shout = Shout(name: name, message: message)
+      self.shouts.append(shout)
+      
+      
+      DispatchQueue.main.async {
         let indexPath = IndexPath(row: self.shouts.count - 1, section: 0)
         self.tableView.reloadData() //reloadRows(at: [indexPath], with: .automatic)
         self.tableView.scrollToRow(at: indexPath, at: .bottom, animated: true)
-      }).disposed(by: disposeBag)
+      }
+    }
     
     // Now connect the socket and join the channel
     self.lobbyChannel = channel

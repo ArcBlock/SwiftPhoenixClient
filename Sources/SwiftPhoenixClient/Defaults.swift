@@ -20,7 +20,7 @@
 
 import Foundation
 
-/// A collection of default values and behaviors used accross the Client
+/// A collection of default values and behaviors used across the Client
 public class Defaults {
   
   /// Default timeout when sending messages
@@ -28,6 +28,9 @@ public class Defaults {
   
   /// Default interval to send heartbeats on
   public static let heartbeatInterval: TimeInterval = 30.0
+
+  /// Default maximum amount of time which the system may delay heartbeat events in order to minimize power usage
+  public static let heartbeatLeeway: DispatchTimeInterval = .milliseconds(10)
   
   /// Default reconnect algorithm for the socket
   public static let reconnectSteppedBackOff: (Int) -> TimeInterval = { tries in
@@ -38,22 +41,22 @@ public class Defaults {
   public static let rejoinSteppedBackOff: (Int) -> TimeInterval = { tries in
     return tries > 3 ? 10 : [1, 2, 5][tries - 1]
   }
-  
+
+  public static let vsn = "2.0.0"
   
   /// Default encode function, utilizing JSONSerialization.data
-  public static let encode: ([String: Any]) -> Data = { json in
+  public static let encode: (Any) -> Data = { json in
     return try! JSONSerialization
       .data(withJSONObject: json,
             options: JSONSerialization.WritingOptions())
   }
   
   /// Default decode function, utilizing JSONSerialization.jsonObject
-  public static let decode: (Data) -> [String: Any]? = { data in
+  public static let decode: (Data) -> Any? = { data in
     guard
       let json = try? JSONSerialization
         .jsonObject(with: data,
                     options: JSONSerialization.ReadingOptions())
-        as? [String: Any]
       else { return nil }
     return json
   }
